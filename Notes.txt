@@ -1,0 +1,6 @@
+-> Cluster analyse mit allen Sites, 
+optimale Anzahl an Clustern finden -> Zentren/Mediods verwenden als Repräsentation für alle Sites
+
+-> Bedenke Span/distance innerhalb Clusters
+
+-> Visualisierung?

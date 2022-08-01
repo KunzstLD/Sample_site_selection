@@ -1,0 +1,230 @@
+---
+title: Sample site selection 
+author: Stefan Kunz
+date: last-modified
+format:
+  html:
+    self-contained: true
+    number-sections: false
+    number-depth: 3
+    anchor-sections: true
+    code-tools: true
+    code-fold: false
+    code-link: false
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    mainfont: Source Sans Pro
+    theme: journal
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    captions: true
+    cap-location: margin
+    table-captions: true
+    tbl-cap-location: margin
+    reference-location: margin
+comments:
+   hypothesis: true
+execute:
+   warning: false
+   message: false
+   echo : false
+editor: visual
+editor_options: 
+   chunk_output_type: console
+---
+
+```{r}
+# TODO: 
+# - Tweak optimal number of groups, use a different approach?
+# - season?
+# - Plot for the categorical variables?
+source(
+  "/home/kunzst/Dokumente/Side_projects/Allan_sampling_sites/R/Set_up.R",
+    local = knitr::knit_global()
+)
+```
+
+### Result of cluster analysis & sites closest to the cluster centroids
+
+Values for each variable are z-standardised (Stand_value), i.e. they can be interpreted in terms of differences in standard deviations from the mean. Colored sites are those sites that have the overall smallest sum of squared differences to the centroid/mean 
+
+```{r}
+# load data
+test_dat <- read.csv2(file.path(data_in, "Data.csv"),
+    dec = ",",
+    sep = "\t"
+)
+rownames(test_dat) <- test_dat$Site
+# str(test_dat)
+# View(test_dat)
+# Mostly numerical, three columns integer, which are probably categories
+# test_dat[, sites := paste0("site_", 1:nrow(test_dat))]
+
+# Cluster analysis ----
+# Create datasets for individual data types
+d_Num <- Filter(is.numeric, test_dat)
+d_Dich <- Filter(is.integer, test_dat)
+ktab <- ktab.list.df(list(d_Num, d_Dich))
+dist_mat <- dist.ktab(ktab, type = c("Q", "D"))
+
+hc <- hclust(dist_mat, method = "ward.D")
+
+## Calculate optimal number of groups ----
+gap <- clusGap(
+    x = as.matrix(dist_mat),
+    FUN = mycluster_hc,
+    K.max = 6,
+    B = 500
+)
+optimal_nog <- maxSE(gap$Tab[, "gap"],
+    gap$Tab[, "SE.sim"],
+    method = "Tibs2001SEmax"
+)
+```
+
+
+```{r}
+## "Centers" of each group ----
+# Then find those sites that are closest to the center
+# Or better make a ranking of the closeness to the center
+
+# Add groups to dataset
+groups <- data.table(
+    Site = names(cutree(
+        hc,
+        k = optimal_nog
+    )),
+    Group = cutree(
+        hc,
+        k = optimal_nog
+    )
+)
+setDT(test_dat)
+test_dat[groups, Group := i.Group, on = "Site"]
+cols <- c(
+  "Fertility",
+  "Agriculture",
+  "Examination",
+  "Education",
+  "Catholic",
+  "Infant.Mortality"
+)
+# test_dat[, lapply(.SD, mean),
+#     .SDcols = !c(
+#         "Site",
+#         "Season",
+#         "Group"
+#     ),
+#     by = Group
+# ]
+test_dat_lf <- melt(test_dat,
+    id.vars = c("Site", "Season", "Group"),
+    variable.name = "Variable",
+    value.name = "Value"
+)
+
+# Different centroid calculation for binary/dichotonoums data?
+dich_vars <- c("FluoT",
+               "IR_wide1375_1398",
+               "IR_sharp_1430",
+               "IR1507")
+
+# Z-Standardize values for numeric variables 
+# For dichotomous variables, just take the values (0 or 1)
+test_dat_lf[!Variable %in% dich_vars, Stand_value := ((Value - mean(Value)) / sd(Value)),
+            by = c("Group", "Variable")]
+test_dat_lf[Variable %in% dich_vars, Stand_value := Value]
+
+# Calculate centroid
+test_dat_lf[!Variable %in% dich_vars, Centroid := mean(Stand_value),
+            by = c("Group", "Variable")]
+test_dat_lf[Variable %in% dich_vars, Centroid := fun_mode(Stand_value),
+            by = c("Group", "Variable")]
+
+# Best sites in terms of difference to the centroid?
+# Could use the SSE
+test_dat_lf[, Diff := (Stand_value - Centroid)^2]
+test_dat_lf[, Sum_diff := sum(Diff, na.rm = TRUE),
+            by = c("Group", "Site")] 
+
+# Dataset with summed differences to the cluster centroids/means
+data_summed_diff <- unique(test_dat_lf[order(Group, Sum_diff), .(Site, Group, Sum_diff)])
+representative_sites <- data_summed_diff[, .SD[1], by = Group][, Site]
+
+# Plot
+test_dat_lf[, Group := factor(Group, levels = 1:6)]
+test_dat_lf[, Site := factor(Site, levels = c(
+  representative_sites,
+  setdiff(unique(test_dat_lf$Site), representative_sites)
+))]
+
+pl_sites <- ggplot(test_dat_lf[!Variable %in% dich_vars, ]) +
+  geom_point(aes(x = Variable,
+                 y = Stand_value,
+                 key = Site),
+             size = 2.5) +
+  geom_point(data =  ~ .x[Site %in% representative_sites, ],
+             aes(x = Variable,
+                 y = Stand_value,
+                 color = Site),
+             size = 2.5) +
+  geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~ Group) +
+  #labs(x = "Group", y = "Z-stand value") +
+  coord_flip() +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 16),
+    axis.text.x = element_text(family = "Roboto Mono",
+                               size = 12),
+    axis.text.y = element_text(family = "Roboto Mono",
+                               size = 12),
+    legend.title = element_text(family = "Roboto Mono",
+                                size = 16),
+    legend.text = element_text(family = "Roboto Mono",
+                               size = 14),
+    strip.text = element_text(size = 12)
+  )
+```
+
+
+```{r}
+#| fig-width: 30
+#| fig-height: 45
+#| column: screen-inset
+ggplotly(pl_sites, tooltip = "Site")
+```
+
+
+### Results table cluster analysis
+
+Values are rounded for better display. The Centroid is the mean for each variable and has been 
+calculated on z-standardised values (i.e., its value is zero).
+
+```{r}
+#| column: screen-inset
+reactable(
+  test_dat_lf[order(Group, Variable),
+              .(Site, 
+                Season, 
+                Group, 
+                Variable, 
+                Value, 
+                Stand_value = round(Stand_value, digits = 2), 
+                Centroid = round(Centroid, digits = 2), 
+                Sum_diff = round(Sum_diff, digits = 2))],
+  columns = list(
+    Stand_value = colDef(name = "Z-Stand. Value", width = 140),
+    Centroid = colDef(name = "Centroid (p. group and variable", width = 140),
+    Sum_diff = colDef(name = "Sum Difference (p. site and group)", width = 140)
+  ),
+  filterable = TRUE,
+  highlight = TRUE,
+  defaultPageSize = 20
+)
+```
+
+
+
+

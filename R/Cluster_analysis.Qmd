@@ -47,7 +47,7 @@ source(
 
 ### Result of cluster analysis & sites closest to the cluster centroids
 
-Values for each variable are z-standardised (Stand_value), i.e. they can be interpreted in terms of differences in standard deviations from the mean. Colored sites are those sites that have the overall smallest sum of squared differences to the centroid/mean 
+Numbers indicate each delineated cluster. Values for each variable are z-standardised (Stand_value), i.e. they can be interpreted in terms of differences in standard deviations from the mean. Colored sites are those sites that have the overall smallest sum of squared differences to the centroid/mean. 
 
 ```{r}
 # load data
@@ -196,11 +196,27 @@ pl_sites <- ggplot(test_dat_lf[!Variable %in% dich_vars, ]) +
 ggplotly(pl_sites, tooltip = "Site")
 ```
 
+#### Result Tables
 
-### Results table cluster analysis
+Sites ordered according to their clusters delineated by hierarchical cluster analysis (Wards method). 
+Sites are also ordered according to their squared sum of differences to the centroid (Sum Difference). 
 
-Values are rounded for better display. The Centroid is the mean for each variable and has been 
-calculated on z-standardised values (i.e., its value is zero).
+```{r}
+cluster_result <- unique(test_dat_lf[order(Group), .(Site, Group, Sum_diff)])
+reactable(
+  cluster_result[order(Group, Sum_diff), .(Site,
+                                           Group,
+                                           Sum_diff = round(Sum_diff, digits = 2))],
+  columns = list(Sum_diff = colDef(name = "Sum Difference (p. site and group)")),
+  filterable = TRUE,
+  highlight = TRUE,
+  defaultPageSize = 20
+)
+```
+
+##### Complete overview results
+
+Complete table of environmental variables and cluster analysis results. Values are rounded for better display. The Centroid is the mean for each variable and has been calculated on z-standardised values (i.e., its value is zero). Sum Difference is the squared sum of differences to the centroid for each site.
 
 ```{r}
 #| column: screen-inset
@@ -215,9 +231,14 @@ reactable(
                 Centroid = round(Centroid, digits = 2), 
                 Sum_diff = round(Sum_diff, digits = 2))],
   columns = list(
-    Stand_value = colDef(name = "Z-Stand. Value", width = 140),
-    Centroid = colDef(name = "Centroid (p. group and variable", width = 140),
-    Sum_diff = colDef(name = "Sum Difference (p. site and group)", width = 140)
+    Site = colDef(width = 120),
+    Season = colDef(width = 120),
+    Group = colDef(width = 120), 
+    # Variable = colDef(width = 180),
+    # Value = colDef(width = 180),
+    Stand_value = colDef(name = "Z-Stand. Value"), # width = 160
+    Centroid = colDef(name = "Centroid (p. group and variable"), # width = 160
+    Sum_diff = colDef(name = "Sum Difference (p. site and group)") # width = 160
   ),
   filterable = TRUE,
   highlight = TRUE,

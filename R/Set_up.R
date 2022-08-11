@@ -1,9 +1,18 @@
 # Libraries
+# Data processing
 library(data.table)
 library(dplyr)
+library(stringi)
+
+# Cluster & related analysis
 library(ade4)
+library(vegan)
 library(cluster)
 library(NbClust)
+library(GDAtools)
+
+# Plotting
+library(dendextend)
 library(reactable)
 library(ggplot2)
 library(plotly)

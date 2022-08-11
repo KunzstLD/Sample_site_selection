@@ -45,128 +45,268 @@ source(
 )
 ```
 
-### Result of cluster analysis & sites closest to the cluster centroids
-
-Numbers indicate each delineated cluster. Values for each variable are z-standardised (Stand_value), i.e. they can be interpreted in terms of differences in standard deviations from the mean. Colored sites are those sites that have the overall smallest sum of squared differences to the centroid/mean. 
 
 ```{r}
 # load data
-test_dat <- read.csv2(file.path(data_in, "Data.csv"),
-    dec = ",",
-    sep = "\t"
+raw_data <- read.csv2(file.path(data_in, "Raw_data_field_2022_Allan_Narjes.csv"),
+    dec = ".",
+    sep = ",",
+    na.strings = c(" ","")
 )
-rownames(test_dat) <- test_dat$Site
-# str(test_dat)
-# View(test_dat)
-# Mostly numerical, three columns integer, which are probably categories
-# test_dat[, sites := paste0("site_", 1:nrow(test_dat))]
+#str(raw_data)
+col_remain <- names(raw_data)[!names(raw_data) %in% c("coordinate", "Land.scape", "Date", "Uhrzeit")]
+raw_data <- raw_data[, col_remain]
+
+# Some columns have "," as dec instead of "."
+# + Some have NWG < ...
+raw_data <- apply(raw_data, 2, function(y)
+  sub("\\,", ".", y))
+raw_data <- apply(raw_data, 2, function(y)
+  sub("< NWG.+", "0", y))
+raw_data <- as.data.frame(raw_data)
+
+# Convert character columns to numierc
+# names(Filter(is.character, raw_data))
+col_convert <- c(
+  "Temp",
+  "pH",
+  "EC",
+  "Alcalinity..mg.L.",
+  "Fluorid..mg.L.",
+  "Chlorid",
+  "Nitrit",
+  "Nitrat",
+  "Sulfat",
+  "Phosphat",
+  "TC..mg.L.",
+  "IC..mg.L.",
+  "TOC..mg.L.",
+  "Natrium",
+  "Ammonium",
+  "Kalium",
+  "Calcium",
+  "Magnesium",
+  "SUVA250..aromaticity.",
+  "SR..fulvic.acid.to.humic.acid.",
+  "E2.E3..inverse.molecular.size..",
+  "Tryptophan.like",
+  "Tyrosin.like",
+  "BIX..biological.",
+  "HIX..aromaticity.",
+  "FI...1.4..plant..soil."
+)
+raw_data[, col_convert] <- sapply(raw_data[, col_convert], as.numeric)
+
+# Create id
+# In columns "Ort" and "number.of.sample" is sometimes whitespace at the end or beginning
+raw_data$Ort <- stri_trim(raw_data$Ort, side = "right")
+raw_data$number.of.sample <- stri_trim(raw_data$number.of.sample, side = "left")
+raw_data$Site <- paste0(raw_data$Ort,"_",raw_data$number.of.sample)
+rownames(raw_data) <- raw_data$Site
 
 # Cluster analysis ----
-# Create datasets for individual data types
-d_Num <- Filter(is.numeric, test_dat)
-d_Dich <- Filter(is.integer, test_dat)
-ktab <- ktab.list.df(list(d_Num, d_Dich))
-dist_mat <- dist.ktab(ktab, type = c("Q", "D"))
 
+# Env. variables
+env_vars <- names(Filter(is.numeric, raw_data))
+raw_data_subset <- raw_data[, env_vars]
+# Filter out sites with missing values
+# 58 sites remain
+raw_data_subset <- na.omit(raw_data_subset[, env_vars])
+# str(raw_data)
+
+# Distance matrix
+# Vegan way, use z-standardised variables
+dist_mat <- vegdist(scale(raw_data_subset), method = "euclidean")
 hc <- hclust(dist_mat, method = "ward.D")
+# hc$order
+
+# Ade4 way:
+# Create datasets for individual data types
+# ade4 approach for mixed variables
+# d_Num <- Filter(is.numeric, raw_data)
+# d_Dich <- Filter(is.integer, raw_data)
+# ktab <- ktab.list.df(list(d_Num, d_Dich))
+# dist_mat <- dist.ktab(ktab, type = c("Q", "D"))
 
 ## Calculate optimal number of groups ----
+
+# GAP Statistic
 gap <- clusGap(
     x = as.matrix(dist_mat),
     FUN = mycluster_hc,
-    K.max = 6,
+    K.max = 20,
     B = 500
 )
-optimal_nog <- maxSE(gap$Tab[, "gap"],
+optimal_nog_gap <- maxSE(gap$Tab[, "gap"],
     gap$Tab[, "SE.sim"],
     method = "Tibs2001SEmax"
 )
+# plot(gap)
+
+# Silhouette width
+# Suggests 19  clusters
+# Optimal number of groups on the basis of maximizing the dissimilarity between groups and minimizing the dissimilarity within groups.
+# TODO: Order of NbClust does not match with the dendrogram (but group assignment is right),
+# e.g. Rose lake is 19, and Emosson lake is 18, which would suggest that both are next to 
+# each other in the dendrogram
+silhouette <- NbClust(
+  diss = dist_mat,
+  distance = NULL,
+  min.nc = 2,
+  max.nc = 20,
+  method = "ward.D",
+  index = "silhouette"
+)
+optimal_nog_sh <- silhouette$Best.nc[["Number_clusters"]]
 ```
 
+### Dendrogram
+
+Branches are colored according to the groups obtained by maximizing the silhouette width.
+
+```{r}
+#| fig-width: 20
+#| fig-height: 30
+#| column: screen-inset
+# Dendrogram plot, 19 groups
+pl_dend <- hc %>% 
+    as.dendrogram() %>%
+    color_branches(k = optimal_nog_sh) %>% 
+    set("labels_cex", 0.7)
+pl_dend_gg <- as.ggdend(pl_dend)
+pl_dend_gg <- ggplot(pl_dend_gg, horiz = TRUE, theme = NULL) +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 22),
+    axis.text.x = element_text(family = "Roboto Mono", size = 16),
+    axis.text.y = element_text(family = "Roboto Mono",
+                               size = 16)
+  )
+pl_dend_gg
+```
+
+```{r}
+# Add groups to dataset
+# (according to the order in the dendrogram/hc)
+groups <- data.table(
+    Site = names(cutree(
+        hc,
+        k = optimal_nog_sh,
+        order_clusters_as_data = FALSE
+    )),
+    Group = cutree(
+        hc,
+        k = optimal_nog_sh,
+        order_clusters_as_data = FALSE
+    )
+)
+# reactable(
+#   groups[order(Group), ],
+#   filterable = TRUE,
+#   highlight = TRUE,
+#   defaultPageSize = 19
+# )
+```
 
 ```{r}
 ## "Centers" of each group ----
 # Then find those sites that are closest to the center
 # Or better make a ranking of the closeness to the center
+setDT(raw_data)
+raw_data[groups, Group := i.Group, on = "Site"]
 
-# Add groups to dataset
-groups <- data.table(
-    Site = names(cutree(
-        hc,
-        k = optimal_nog
-    )),
-    Group = cutree(
-        hc,
-        k = optimal_nog
-    )
-)
-setDT(test_dat)
-test_dat[groups, Group := i.Group, on = "Site"]
-cols <- c(
-  "Fertility",
-  "Agriculture",
-  "Examination",
-  "Education",
-  "Catholic",
-  "Infant.Mortality"
-)
-# test_dat[, lapply(.SD, mean),
-#     .SDcols = !c(
-#         "Site",
-#         "Season",
-#         "Group"
-#     ),
-#     by = Group
-# ]
-test_dat_lf <- melt(test_dat,
-    id.vars = c("Site", "Season", "Group"),
-    variable.name = "Variable",
-    value.name = "Value"
+# Rm 12 rows where env. variables have not been measured
+raw_data <- raw_data[!is.na(Group), ]
+
+# Z-Standardize values for numeric variables
+# Might be a way to do this with scale
+raw_data[, (env_vars) := lapply(.SD, function(y)
+  (y - mean(y)) / sd(y)), .SDcols = env_vars]
+
+# LF for calculating centroid
+raw_data_lf <- melt(
+  raw_data,
+  id.vars = c("Region", "number.of.sample", "Ort", "Remark", "Site", "Group"),
+  variable.name = "Variable",
+  value.name = "Value"
 )
 
-# Different centroid calculation for binary/dichotonoums data?
-dich_vars <- c("FluoT",
-               "IR_wide1375_1398",
-               "IR_sharp_1430",
-               "IR1507")
-
-# Z-Standardize values for numeric variables 
-# For dichotomous variables, just take the values (0 or 1)
-test_dat_lf[!Variable %in% dich_vars, Stand_value := ((Value - mean(Value)) / sd(Value)),
-            by = c("Group", "Variable")]
-test_dat_lf[Variable %in% dich_vars, Stand_value := Value]
-
-# Calculate centroid
-test_dat_lf[!Variable %in% dich_vars, Centroid := mean(Stand_value),
-            by = c("Group", "Variable")]
-test_dat_lf[Variable %in% dich_vars, Centroid := fun_mode(Stand_value),
-            by = c("Group", "Variable")]
-
-# Best sites in terms of difference to the centroid?
+# Calculate centroid & closest sites in terms of difference to the centroid?
 # Could use the SSE
-test_dat_lf[, Diff := (Stand_value - Centroid)^2]
-test_dat_lf[, Sum_diff := sum(Diff, na.rm = TRUE),
-            by = c("Group", "Site")] 
+raw_data_lf[, Centroid := mean(Value), by = c("Group", "Variable")]
+raw_data_lf[, Diff := (Value - Centroid)^2]
+raw_data_lf[, Sum_diff := sum(Diff), by = c("Group", "Site")] 
 
+# Calculate medoids
+# Here, order of the data is needed, not the dendrogram order (otherwise mediod is
+# not calculated per group)
+ind_medoids <- medoids(dist_mat, cutree(hc, 
+                                        k = optimal_nog_sh))
+# raw_data[ind_medoids, .(Site, Group)]
+```
+
+### Tables Centroids & Mediods
+
+Sites ordered according to their clusters delineated by hierarchical cluster analysis (Wards method) and according to their squared sum of differences to the centroid.
+
+```{r}
+centroid_results <- unique(raw_data_lf[order(Group), .(Site, Group, Sum_diff)])
+reactable(
+  centroid_results[order(Group, Sum_diff), .(Site,
+                                           Group,
+                                           Sum_diff = round(Sum_diff, digits = 2))],
+  columns = list(Sum_diff = colDef(name = "Sum Difference (p. site and group)")),
+  filterable = TRUE,
+  highlight = TRUE,
+  defaultPageSize = 20
+)
+```
+
+Sites closest to the centroid and mediods for each cluster.
+
+```{r}
+centroid_subset <- centroid_results[order(Group, Sum_diff), .SD[1], .SDcols = "Site", by = Group]
+setnames(centroid_subset,
+         old = "Site",
+         new = "Centroid")
+mediod_subset <- raw_data[ind_medoids, .(Mediod = Site, Group)]
+# Groups are not ordered in mediod subset. Hence, merge with centroid_subset
+centroid_subset[mediod_subset,
+                Mediod := i.Mediod,
+                on = "Group"]
+reactable(
+  centroid_subset,
+  highligh = TRUE,
+  filterable = TRUE,
+  defaultPageSize = 19
+)
+```
+
+
+### Clusters & z-standardized values of environmental parameters
+
+Numbers indicate each delineated cluster. Values for each variable are z-standardised (Stand_value), i.e. they can be interpreted in terms of differences in standard deviations from the mean. Colored sites are those sites that have the overall smallest sum of squared differences to the centroid.
+
+```{r}
 # Dataset with summed differences to the cluster centroids/means
-data_summed_diff <- unique(test_dat_lf[order(Group, Sum_diff), .(Site, Group, Sum_diff)])
+data_summed_diff <- unique(raw_data_lf[order(Group, Sum_diff), .(Site, Group, Sum_diff)])
 representative_sites <- data_summed_diff[, .SD[1], by = Group][, Site]
 
 # Plot
-test_dat_lf[, Group := factor(Group, levels = 1:6)]
-test_dat_lf[, Site := factor(Site, levels = c(
+raw_data_lf[, Group := factor(Group, levels = 1:19)]
+raw_data_lf[, Site := factor(Site, levels = c(
   representative_sites,
-  setdiff(unique(test_dat_lf$Site), representative_sites)
+  setdiff(unique(raw_data_lf$Site), representative_sites)
 ))]
 
-pl_sites <- ggplot(test_dat_lf[!Variable %in% dich_vars, ]) +
+pl_sites <- ggplot(raw_data_lf) +
   geom_point(aes(x = Variable,
-                 y = Stand_value,
+                 y = Value,
                  key = Site),
              size = 2.5) +
   geom_point(data =  ~ .x[Site %in% representative_sites, ],
              aes(x = Variable,
-                 y = Stand_value,
+                 y = Value,
                  color = Site),
              size = 2.5) +
   geom_hline(aes(yintercept = 0), linetype = "dotted") +
@@ -188,64 +328,41 @@ pl_sites <- ggplot(test_dat_lf[!Variable %in% dich_vars, ]) +
   )
 ```
 
-
 ```{r}
 #| fig-width: 30
-#| fig-height: 45
+#| fig-height: 50
 #| column: screen-inset
 ggplotly(pl_sites, tooltip = "Site")
 ```
 
-#### Result Tables
-
-Sites ordered according to their clusters delineated by hierarchical cluster analysis (Wards method). 
-Sites are also ordered according to their squared sum of differences to the centroid (Sum Difference). 
-
 ```{r}
-cluster_result <- unique(test_dat_lf[order(Group), .(Site, Group, Sum_diff)])
-reactable(
-  cluster_result[order(Group, Sum_diff), .(Site,
-                                           Group,
-                                           Sum_diff = round(Sum_diff, digits = 2))],
-  columns = list(Sum_diff = colDef(name = "Sum Difference (p. site and group)")),
-  filterable = TRUE,
-  highlight = TRUE,
-  defaultPageSize = 20
-)
-```
-
 ##### Complete overview results
 
-Complete table of environmental variables and cluster analysis results. Values are rounded for better display. The Centroid is the mean for each variable and has been calculated on z-standardised values (i.e., its value is zero). Sum Difference is the squared sum of differences to the centroid for each site.
+# Complete table of environmental variables and cluster analysis results. Values are rounded for better display. The Centroid is the mean for each variable and has been calculated on z-standardised values (i.e., its value is zero). Sum Difference is the squared sum of differences to the centroid for each site.
 
-```{r}
 #| column: screen-inset
-reactable(
-  test_dat_lf[order(Group, Variable),
-              .(Site, 
-                Season, 
-                Group, 
-                Variable, 
-                Value, 
-                Stand_value = round(Stand_value, digits = 2), 
-                Centroid = round(Centroid, digits = 2), 
-                Sum_diff = round(Sum_diff, digits = 2))],
-  columns = list(
-    Site = colDef(width = 120),
-    Season = colDef(width = 120),
-    Group = colDef(width = 120), 
-    # Variable = colDef(width = 180),
-    # Value = colDef(width = 180),
-    Stand_value = colDef(name = "Z-Stand. Value"), # width = 160
-    Centroid = colDef(name = "Centroid (p. group and variable"), # width = 160
-    Sum_diff = colDef(name = "Sum Difference (p. site and group)") # width = 160
-  ),
-  filterable = TRUE,
-  highlight = TRUE,
-  defaultPageSize = 20
-)
+# reactable(
+#   test_dat_lf[order(Group, Variable),
+#               .(Site, 
+#                 Season, 
+#                 Group, 
+#                 Variable, 
+#                 Value, 
+#                 Stand_value = round(Stand_value, digits = 2), 
+#                 Centroid = round(Centroid, digits = 2), 
+#                 Sum_diff = round(Sum_diff, digits = 2))],
+#   columns = list(
+#     Site = colDef(width = 120),
+#     Season = colDef(width = 120),
+#     Group = colDef(width = 120), 
+#     # Variable = colDef(width = 180),
+#     # Value = colDef(width = 180),
+#     Stand_value = colDef(name = "Z-Stand. Value"), # width = 160
+#     Centroid = colDef(name = "Centroid (p. group and variable"), # width = 160
+#     Sum_diff = colDef(name = "Sum Difference (p. site and group)") # width = 160
+#   ),
+#   filterable = TRUE,
+#   highlight = TRUE,
+#   defaultPageSize = 20
+# )
 ```
-
-
-
-

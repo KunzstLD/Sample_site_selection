@@ -5,7 +5,7 @@
 # Helper function for GAP statistic
 mycluster_hc <- function(x, k) {
   list(cluster = cutree(hclust(as.dist(x),
-                               method = "ward.D"
+                               method = "ward.D2"
   ),
   k = k
   ))

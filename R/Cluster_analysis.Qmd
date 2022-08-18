@@ -47,6 +47,7 @@ source(
 
 
 ```{r}
+# Data processing ----
 # load data
 raw_data <- read.csv2(file.path(data_in, "Raw_data_field_2022_Allan_Narjes.csv"),
     dec = ".",
@@ -61,41 +62,11 @@ raw_data <- raw_data[, col_remain]
 # + Some have NWG < ...
 raw_data <- apply(raw_data, 2, function(y)
   sub("\\,", ".", y))
+
+# Replace NWG values with half of the level of determination
 raw_data <- apply(raw_data, 2, function(y)
   sub("< NWG.+", "0", y))
 raw_data <- as.data.frame(raw_data)
-
-# Convert character columns to numierc
-# names(Filter(is.character, raw_data))
-col_convert <- c(
-  "Temp",
-  "pH",
-  "EC",
-  "Alcalinity..mg.L.",
-  "Fluorid..mg.L.",
-  "Chlorid",
-  "Nitrit",
-  "Nitrat",
-  "Sulfat",
-  "Phosphat",
-  "TC..mg.L.",
-  "IC..mg.L.",
-  "TOC..mg.L.",
-  "Natrium",
-  "Ammonium",
-  "Kalium",
-  "Calcium",
-  "Magnesium",
-  "SUVA250..aromaticity.",
-  "SR..fulvic.acid.to.humic.acid.",
-  "E2.E3..inverse.molecular.size..",
-  "Tryptophan.like",
-  "Tyrosin.like",
-  "BIX..biological.",
-  "HIX..aromaticity.",
-  "FI...1.4..plant..soil."
-)
-raw_data[, col_convert] <- sapply(raw_data[, col_convert], as.numeric)
 
 # Create id
 # In columns "Ort" and "number.of.sample" is sometimes whitespace at the end or beginning
@@ -104,7 +75,49 @@ raw_data$number.of.sample <- stri_trim(raw_data$number.of.sample, side = "left")
 raw_data$Site <- paste0(raw_data$Ort,"_",raw_data$number.of.sample)
 rownames(raw_data) <- raw_data$Site
 
-# Cluster analysis ----
+# simplify col names
+names(raw_data) <- sub("\\..mg\\.L\\.", "", names(raw_data))
+names(raw_data) <- sub("\\.$|\\..$", "", names(raw_data))
+
+# Convert character columns to numeric
+# names(Filter(is.character, raw_data))
+col_convert <- c(
+  "Temp",
+  "pH",
+  "EC",
+  "Alcalinity",
+  "Fluorid",
+  "Chlorid",
+  "Nitrit",
+  "Nitrat",
+  "Sulfat",
+  "Phosphat",
+  "TC",
+  "IC",
+  "TOC",
+  "Natrium",
+  "Ammonium",
+  "Kalium",
+  "Calcium",
+  "Magnesium",
+  "SUVA250..aromaticity",
+  "SR..fulvic.acid.to.humic.acid",
+  "E2.E3..inverse.molecular.size",
+  "Tryptophan.like",
+  "Tyrosin.like",
+  "BIX..biological",
+  "HIX..aromaticity",
+  "FI...1.4..plant..soil"
+)
+raw_data[, col_convert] <- sapply(raw_data[, col_convert], as.numeric)
+
+# Remove highly correlated variables
+# combine Na and Cl
+raw_data$Na_Cl <- raw_data$Chlorid + raw_data$Natrium
+raw_data[, c("Chlorid", "Natrium")] <- NULL
+
+# Further delete: "Fluorid", "Nitrit", "Phosphat", "TC", "IC" und "Ammonium"
+raw_data[, c("Fluorid", "Nitrit", "Phosphat","TC", "IC")] <- NULL
 
 # Env. variables
 env_vars <- names(Filter(is.numeric, raw_data))
@@ -112,12 +125,16 @@ raw_data_subset <- raw_data[, env_vars]
 # Filter out sites with missing values
 # 58 sites remain
 raw_data_subset <- na.omit(raw_data_subset[, env_vars])
-# str(raw_data)
+# str(raw_data_subset)
+```
+
+```{r}
+# Cluster analysis ----
 
 # Distance matrix
 # Vegan way, use z-standardised variables
 dist_mat <- vegdist(scale(raw_data_subset), method = "euclidean")
-hc <- hclust(dist_mat, method = "ward.D")
+hc <- hclust(dist_mat, method = "ward.D2")
 # hc$order
 
 # Ade4 way:
@@ -258,7 +275,7 @@ reactable(
   columns = list(Sum_diff = colDef(name = "Sum Difference (p. site and group)")),
   filterable = TRUE,
   highlight = TRUE,
-  defaultPageSize = 20
+  defaultPageSize = 29
 )
 ```
 
@@ -278,7 +295,7 @@ reactable(
   centroid_subset,
   highligh = TRUE,
   filterable = TRUE,
-  defaultPageSize = 19
+  defaultPageSize = 20
 )
 ```
 
@@ -293,7 +310,7 @@ data_summed_diff <- unique(raw_data_lf[order(Group, Sum_diff), .(Site, Group, Su
 representative_sites <- data_summed_diff[, .SD[1], by = Group][, Site]
 
 # Plot
-raw_data_lf[, Group := factor(Group, levels = 1:19)]
+raw_data_lf[, Group := factor(Group, levels = 1:20)]
 raw_data_lf[, Site := factor(Site, levels = c(
   representative_sites,
   setdiff(unique(raw_data_lf$Site), representative_sites)
